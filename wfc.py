@@ -94,7 +94,7 @@ Update = Callable[[T], T]
 Weighted = tuple[T, int]
 
 
-def waveform_collapse[
+def wavefunction_collapse[
     State, Element
 ](
     state: State,
@@ -105,16 +105,25 @@ def waveform_collapse[
 ):
 
     while True:
-        next_element = min(
-            *get_elements(state), key=lambda element: entropy(state, element)
+        non_collapsed = list(
+            filter(lambda element: entropy(state, element) > 0, get_elements(state))
         )
+        if (len(non_collapsed)) == 0:
+            return state
+
+        next_element = min(non_collapsed, key=lambda element: entropy(state, element))
 
         if (entropy(state, next_element)) == 0:
             return state
 
-        just_actions, weights = zip(*actions(state, next_element))
+        weighted_actions = actions(state, next_element)
+        # Contradiction Encountered
+        if len(weighted_actions) == 0:
+            return state
 
+        just_actions, weights = zip(*weighted_actions)
         action = random.choices(just_actions, weights=weights)[0]
+
         state = propagate(action(state), next_element)
 
 
