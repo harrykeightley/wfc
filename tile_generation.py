@@ -33,17 +33,13 @@ ArrayNx4xN = Annotated[npt.NDArray[DType], Literal["N", 4, "N"]]
 Neighbours = ArrayNx4xN[np.bool_]
 
 
-# @dataclass
-# class Tile
-
-
 @dataclass
 class TileGenerationConfig:
     kernel: Vec2
-    neighbour_overlap: int
     sampling_step: int
     max_attempts: int
     output_pixels: Vec2
+    neighbour_overlap: int
     output_path: Optional[Path] = None
     gui: bool = False
 
@@ -71,6 +67,20 @@ class TileInfo:
 
         return cls(tile_map, frequencies, neighbours)
 
+    @classmethod
+    def from_tileset(cls, config: TileGenerationConfig, dir: Path):
+        tiles: list[PixelData] = []
+        for file in dir.iterdir():
+            if not file.is_file():
+                continue
+            tiles.append(PixelData.from_image(Image.open(file)))
+
+        tile_map = dict(enumerate(tiles))
+        frequencies = {id: 1 for id in tile_map.keys()}
+
+        neighbours = generate_neighbours(tile_map, overlap=1)
+        return cls(tile_map, frequencies, neighbours)
+
     @property
     def ids(self) -> list[int]:
         return list(self.tile_map.keys())
@@ -81,15 +91,10 @@ class TileInfo:
 
 class TileGenerator(WFC[Wave, Position]):
 
-    def __init__(
-        self,
-        config: TileGenerationConfig,
-        input_image: Image.Image,
-    ) -> None:
+    def __init__(self, config: TileGenerationConfig, tile_info: TileInfo) -> None:
         self._status = "Pending"
         self.config = config
-        self.input_image = input_image
-        self.tile_info = TileInfo.from_image(config, input_image)
+        self.tile_info = tile_info
 
         output_width, output_height = config.output_pixels
         kernel_width, kernel_height = config.kernel
@@ -107,7 +112,7 @@ class TileGenerator(WFC[Wave, Position]):
 
     def reset(self):
         rows, cols = self.tiled_bounds
-        self.state = np.ones((rows, cols, len(self.tile_info)), dtype=np.bool_)
+        self.state = np.ones((cols, rows, len(self.tile_info)), dtype=np.bool_)
 
     @property
     def wave(self):
@@ -224,38 +229,11 @@ class TileGenerator(WFC[Wave, Position]):
         return result.to_image()
 
 
-def get_wave_elements(wave: Wave) -> Iterable[Position]:
-    rows, cols, _ = wave.shape
-    for row in range(rows):
-        for col in range(cols):
-            position = row, col
-            yield position
-
-
-def wave_element_entropy(wave: Wave, position: Position):
-    return np.count_nonzero(wave[position]) - 1
-
-
-# Wave is type <row, col, id, is_possible>
-
-
 def collapse(id: int, position: Position, wave: Wave) -> Wave:
     row, col = position
     wave[row, col, :] = False
     wave[row, col, id] = True
     return wave
-
-
-def is_wave_valid(wave: Wave) -> bool:
-    return not any(
-        wave_element_entropy(wave, position) == -1
-        for position in get_wave_elements(wave)
-    )
-
-
-def get_collapsed_index(wave: Wave, position: Position) -> int:
-    """Requires the wave to be collapsed to a value at the given position"""
-    return np.argmax(wave[position])  # type: ignore
 
 
 def build_wave_actions(tile_info: TileInfo, wave: Wave, position: Position):
@@ -268,97 +246,6 @@ def build_wave_actions(tile_info: TileInfo, wave: Wave, position: Position):
             result.append((partial(collapse, id, position), tile_info.frequencies[id]))
 
     return result
-
-
-def generate_tiles(
-    config: TileGenerationConfig,
-    image_path: Path,
-    render_hook: Optional[Callable[[Image.Image], None]] = None,
-):
-    image = Image.open(image_path)
-    tile_info = TileInfo.from_image(config, image)
-
-    output_width, output_height = config.output_pixels
-    kernel_width, kernel_height = config.kernel
-
-    row_step = kernel_height - config.neighbour_overlap
-    col_step = kernel_width - config.neighbour_overlap
-
-    rows = math.ceil(output_height / row_step)
-    cols = math.ceil(output_width / col_step)
-
-    bounds = rows, cols
-    invalid_tile = PixelData.from_colour(config.kernel, (255, 0, 0))
-
-    wave_actions = partial(build_wave_actions, tile_info)
-
-    def propagate(wave: Wave, last_collapsed_position: Position) -> Wave:
-        # Only do immediate propagation
-        last_id = get_collapsed_index(wave, last_collapsed_position)
-        for direction_index, direction in enumerate(Direction):
-            next_position = position_in_direction(last_collapsed_position, direction)
-            if not is_in_bounds(bounds, next_position):
-                continue
-
-            wave[next_position] = np.logical_and(
-                wave[next_position], tile_info.neighbours[last_id, direction_index]
-            )
-        return wave
-
-    def display_tile(wave: Wave, position: Position) -> PixelData:
-        # Get a list of lists of the indices that are nonzero
-        possible = np.argwhere(wave[position])
-
-        # Get the possible tiles for this position
-        tiles = [tile_info.tile_map[arg[0]] for arg in possible.tolist()]
-
-        # Check for invalid tiles
-        if len(tiles) == 0:
-            return invalid_tile
-
-        return PixelData.blend(*tiles)
-
-    def reconstruct(wave: Wave) -> Image.Image:
-        result = PixelData.from_dimensions((output_width, output_height))
-        for row in range(rows):
-            for col in range(cols):
-                position = row, col
-                pixel_position = row * row_step, col * col_step
-                tile = display_tile(wave, position)
-                result = result.overlay(pixel_position, tile)
-
-        return result.to_image()
-
-    def display(wave: Wave) -> None:
-        image = reconstruct(wave)
-        if render_hook is not None:
-            render_hook(image)
-
-    # find solution
-    for _ in tqdm(range(config.max_attempts)):
-        state: Wave = np.ones((rows, cols, len(tile_info)), dtype=np.bool_)
-        solution = wavefunction_collapse(
-            state,
-            get_wave_elements,
-            wave_element_entropy,
-            wave_actions,
-            propagate,
-            display,
-        )
-        if is_wave_valid(solution):
-            print("Found solution!")
-            image = reconstruct(solution)
-            if config.output_path is not None:
-                with open(config.output_path, "w") as fp:
-                    image.save(fp)
-            break
-
-    if not is_wave_valid(solution):
-        print("No solution!")
-        image = reconstruct(solution)
-        if config.output_path is not None:
-            with open(config.output_path, "w") as fp:
-                image.save(fp)
 
 
 def generate_neighbours(tiles: dict[int, PixelData], overlap: int = 1) -> Neighbours:

@@ -3,8 +3,7 @@ from functools import partial
 from pathlib import Path
 
 from gui import run_tile_generation
-from tile_generation import TileGenerationConfig, generate_tiles
-from utils import Vec2
+from tile_generation import TileGenerationConfig, TileGenerator, TileInfo
 
 
 def as_path(path):
@@ -147,9 +146,15 @@ def main(args):
 
             if config.gui:
                 run_tile_generation(config, image_path)
+                return
 
-            else:
-                generate_tiles(config, image_path)
+            # CLI
+            info = TileInfo.from_image(config, image_path)
+            tiler = TileGenerator(config, info)
+            tiler.run_to_completion()
+            image = tiler.build_image()
+            with open("result.jpg", "w") as fp:
+                image.save(fp)
 
         case "sudoku":
             pass
