@@ -1,97 +1,16 @@
-from enum import Enum, StrEnum
-from typing import Annotated, Callable, Iterable, Literal, Optional, Tuple, TypeVar
-from PIL import Image
-from pathlib import Path
-from dataclasses import dataclass
-import numpy as np
-import numpy.typing as npt
+from typing import Callable, Iterable, Literal, Optional, TypeVar
+from abc import ABC, abstractmethod
+
 import random
-
-Vec2 = tuple[int, int]
-Position = Vec2
-Pixel = tuple[int, int, int]
-
-DType = TypeVar("DType", bound=np.generic)
-ArrayNxN = Annotated[npt.NDArray[DType], Literal["N", "N"]]
-ArrayNxNx3 = Annotated[npt.NDArray[DType], Literal["N", "N", 3]]
-
-
-class Direction(StrEnum):
-    UP = "up"
-    DOWN = "down"
-    LEFT = "left"
-    RIGHT = "right"
-
-
-@dataclass
-class PixelData:
-    data: ArrayNxNx3[np.uint8]
-
-    def map(self, fn: Callable[[ArrayNxNx3[np.uint8]], ArrayNxNx3[np.uint8]]):
-        self.data = fn(self.data)
-        return self
-
-    @classmethod
-    def from_image(cls, image: Image.Image):
-        pixels: list[Pixel] = list(image.getdata())  # type: ignore
-        width, height = image.size
-        result: ArrayNxNx3[np.uint8] = np.empty((width, height, 3), np.uint8)
-
-        for x in range(width):
-            for y in range(height):
-                position = x, y
-                pixel = pixels[width * y + x]
-                result[position] = pixel
-
-        return PixelData(result)
-
-    def generate_tiles(self, kernel: Vec2):
-        n, m = kernel
-        width, height, _ = self.data.shape
-
-        # pass kernel over data and extract
-        for x in range(0, width - n, n):
-            for y in range(0, height - m, m):
-                start = x, y
-                yield self.crop(start, kernel)
-
-    def crop(self, position: Position, kernel: Vec2) -> "PixelData":
-        x, y = position
-        width, height = kernel
-
-        data = self.data[x : x + width, y : y + height]
-        return PixelData(data)
-
-    def intersects(
-        self, other: "PixelData", from_direction: Direction, offset: Vec2
-    ) -> bool:
-        return True
-
-    def __hash__(self):
-        return hash(self.data.tobytes())
-
-    def __eq__(self, value: object, /) -> bool:
-        if not isinstance(value, PixelData):
-            return False
-
-        return np.array_equal(value.data, self.data)
-
-
-@dataclass
-class WFCConfig:
-    kernel: Vec2
-
-
-def wfc(config: WFCConfig, image_path: Path):
-    image = Image.open(image_path)
-    bitmap = PixelData.from_image(image)
-
-    tiles = set(bitmap.generate_tiles(config.kernel))
 
 
 T = TypeVar("T")
 Update = Callable[[T], T]
 Weighted = tuple[T, int]
+StepResult = Literal["Pending", "Result", "Contradiction"]
+
+INVALID_ENTROPY = -1
+STABLE_ENTROPY = 0
 
 
 def wavefunction_collapse[
@@ -102,45 +21,93 @@ def wavefunction_collapse[
     entropy: Callable[[State, Element], int],
     actions: Callable[[State, Element], list[Weighted[Update[State]]]],
     propagate: Callable[[State, Element], State],
+    display: Callable[[State], None] = lambda _: None,
 ):
-
     while True:
-        non_collapsed = list(
-            filter(lambda element: entropy(state, element) > 0, get_elements(state))
-        )
-        if (len(non_collapsed)) == 0:
-            return state
+        res, state = step(state, get_elements, entropy, actions, propagate)
+        display(state)
 
-        next_element = min(non_collapsed, key=lambda element: entropy(state, element))
+        if res != "Pending":
+            break
 
-        if (entropy(state, next_element)) == 0:
-            return state
+    return state
 
-        weighted_actions = actions(state, next_element)
-        # Contradiction Encountered
-        if len(weighted_actions) == 0:
-            return state
 
+def step[
+    State, Element
+](
+    state: State,
+    get_elements: Callable[[State], Iterable[Element]],
+    entropy: Callable[[State, Element], int],
+    actions: Callable[[State, Element], list[Weighted[Update[State]]]],
+    propagate: Callable[[State, Element], State],
+) -> tuple[StepResult, State]:
+
+    unstable_elements = list(
+        filter(lambda element: entropy(state, element) != 0, get_elements(state))
+    )
+    next_element = min(unstable_elements, key=lambda element: entropy(state, element))
+    if (entropy(state, next_element)) == INVALID_ENTROPY:
+        return ("Contradiction", state)
+
+    if (len(unstable_elements)) == 0:
+        return ("Result", state)
+
+    weighted_actions = actions(state, next_element)
+    just_actions, weights = zip(*weighted_actions)
+    action = random.choices(just_actions, weights=weights)[0]
+
+    return ("Pending", propagate(action(state), next_element))
+
+
+class WFC[State, Element](ABC):
+    def __init__(self, initial_state: State) -> None:
+        self.state = initial_state
+        self._status: StepResult = "Pending"
+
+    @property
+    def status(self):
+        return self._status
+
+    @abstractmethod
+    def get_elements(self) -> Iterable[Element]:
+        pass
+
+    @abstractmethod
+    def entropy(self, element: Element) -> int:
+        pass
+
+    @abstractmethod
+    def actions(self, element: Element) -> list[Weighted[Update[State]]]:
+        pass
+
+    @abstractmethod
+    def propagate(self, last_collapsed_element: Element) -> None:
+        pass
+
+    def _is_unstable(self, element: Element) -> bool:
+        return self.entropy(element) != STABLE_ENTROPY
+
+    def step(self):
+        unstable_elements = list(filter(self._is_unstable, self.get_elements()))
+
+        if (len(unstable_elements)) == 0:
+            self._status = "Result"
+            print("finished")
+            return
+
+        next_element = min(unstable_elements, key=lambda element: self.entropy(element))
+
+        if (self.entropy(next_element)) == INVALID_ENTROPY:
+            self._status = "Contradiction"
+            return
+
+        weighted_actions = self.actions(next_element)
         just_actions, weights = zip(*weighted_actions)
         action = random.choices(just_actions, weights=weights)[0]
+        self.state = action(self.state)
+        self.propagate(next_element)
 
-        state = propagate(action(state), next_element)
-
-
-Wave = ArrayNxN[np.bool_]
-
-
-def get_wave_elements(wave: Wave) -> Iterable[Position]:
-    width, height = wave.shape
-    for y in range(height):
-        for x in range(width):
-            position = x, y
-            yield position
-
-
-def wave_element_entropy(wave: Wave, position: Position):
-    return np.count_nonzero(wave[position])
-
-
-def wave_actions(wave: Wave, position: Position) -> list[Weighted[Update[Wave]]]:
-    pass
+    def run_to_completion(self):
+        while self.status == "Pending":
+            self.step()

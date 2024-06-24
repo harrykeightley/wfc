@@ -1,7 +1,8 @@
 from functools import partial
 from typing import Any, Callable, Iterable, Optional
 
-from wfc import Position, Update, Weighted, wavefunction_collapse
+from wfc import Update, Weighted, wavefunction_collapse
+from utils import Position
 
 BOARD_SIZE = 9
 ALL_NUMBERS = tuple(range(1, 10))
