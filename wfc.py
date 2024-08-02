@@ -93,7 +93,6 @@ class WFC[State, Element](ABC):
 
         if (len(unstable_elements)) == 0:
             self._status = "Result"
-            print("finished")
             return
 
         next_element = min(unstable_elements, key=lambda element: self.entropy(element))
