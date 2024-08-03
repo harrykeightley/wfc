@@ -3,6 +3,7 @@ from functools import partial
 from pathlib import Path
 
 from gui import run_tile_generation
+from sudoku import sudoku_generator
 from tile_generation import TileGenerationConfig, TileGenerator, TileInfo
 
 
@@ -157,7 +158,7 @@ def main(args):
                 image.save(fp)
 
         case "sudoku":
-            pass
+            sudoku_generator()
 
         case action:
             print(f"unknown option {action}")

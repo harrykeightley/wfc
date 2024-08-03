@@ -1,23 +1,23 @@
 from functools import partial
 from typing import Any, Callable, Iterable, Optional
 
-from wfc import Update, Weighted, wavefunction_collapse
+from wfc import INVALID_ENTROPY, STABLE_ENTROPY, Update, Weighted, wavefunction_collapse
 from utils import Position
 
 BOARD_SIZE = 9
 ALL_NUMBERS = tuple(range(1, 10))
 
-Square = dict[int, bool]
+Square = set[int]
 Board = dict[Position, Square]
 BoardResult = dict[Position, int]
 
 
-def initial_square_state():
-    return {number: True for number in ALL_NUMBERS}
+def initial_square_state() -> Square:
+    return {x for x in range(1, 10)}
 
 
 def square_potential(square: Square):
-    return len([v for v in square.values() if v])
+    return len(square)
 
 
 def initial_board_state() -> Board:
@@ -61,7 +61,7 @@ def positions_in_quadrant(position: Position) -> list[Position]:
 
 
 def square_entropy(board: Board, position: Position):
-    return max(0, (square_potential(board[position])) - 1)
+    return square_potential(board[position]) - 1
 
 
 def is_square_solved(square: Square):
@@ -69,10 +69,8 @@ def is_square_solved(square: Square):
 
 
 def get_square_solution(square: Square):
-    for number, is_valid in square.items():
-        if is_valid:
-            return number
-
+    if is_square_solved(square):
+        return list(square)[0]
     return -1
 
 
@@ -89,7 +87,7 @@ def get_fixed_squares(board: Board) -> BoardResult:
 
 def is_solved(board: Board) -> bool:
     return all(
-        square_potential(board[position]) == 1 for position in get_positions(board)
+        square_entropy(board, position) == STABLE_ENTROPY for position in get_positions(board)
     )
 
 
@@ -102,7 +100,7 @@ def intersecting_positions(position: Position) -> list[Position]:
     ]
 
 
-def potential_numbers(board: Board, position: Position) -> set[int]:
+def potential_numbers(board: Board, position: Position) -> Square:
     positions_to_check = intersecting_positions(position)
     numbers = set(
         map(
@@ -119,13 +117,12 @@ def update_square(board: Board, position: Position, square: Square) -> Board:
 
 
 def collapse_square(number: int) -> Square:
-    result = {number: False for number in ALL_NUMBERS}
-    result[number] = True
-    return result
+    return {number}
 
 
 def propagate_number(square: Square, number: int) -> Square:
-    square[number] = False
+    if number in square:
+        square.remove(number)
     return square
 
 
@@ -153,24 +150,24 @@ def print_board(board: Board, display: Callable[[Board, Position], Optional[Any]
 
 def get_fixed(board: Board, position: Position):
     square = board[position]
+    entropy = square_entropy(board, position)
     if is_square_solved(square):
         return str(get_square_solution(square))
+    if entropy == INVALID_ENTROPY:
+        return "X"
     else:
-        return " "
+        return "?"
 
 
 def propagate_collapse(board: Board, last_position: Position) -> Board:
+    for position in board:
+        square = board[position]
+        if is_square_solved(square):
+            continue
+        board[position] = square.intersection(potential_numbers(board, position))
     print_board(board, get_fixed)
-
-    last_number = get_square_solution(board[last_position])
-    relevant_positions = intersecting_positions(last_position)
-    for position in relevant_positions:
-        if position != last_position:
-            update_square(
-                board, position, propagate_number(board[position], last_number)
-            )
-
     return board
+
 
 
 def sudoku_generator(tries=10):

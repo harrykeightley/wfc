@@ -5,7 +5,7 @@ import random
 
 
 T = TypeVar("T")
-Update = Callable[[T], T]
+Update = Callable[[T], T] 
 Weighted = tuple[T, int]
 StepResult = Literal["Pending", "Result", "Contradiction"]
 
@@ -44,16 +44,17 @@ def step[
 ) -> tuple[StepResult, State]:
 
     unstable_elements = list(
-        filter(lambda element: entropy(state, element) != 0, get_elements(state))
+        filter(lambda element: entropy(state, element) != STABLE_ENTROPY, get_elements(state))
     )
+    if (len(unstable_elements)) == 0:
+        return ("Result", state)
+
     next_element = min(unstable_elements, key=lambda element: entropy(state, element))
     if (entropy(state, next_element)) == INVALID_ENTROPY:
         return ("Contradiction", state)
 
-    if (len(unstable_elements)) == 0:
-        return ("Result", state)
-
     weighted_actions = actions(state, next_element)
+
     just_actions, weights = zip(*weighted_actions)
     action = random.choices(just_actions, weights=weights)[0]
 
